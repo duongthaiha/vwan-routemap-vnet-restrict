@@ -1,0 +1,19 @@
+#cloud-config
+write_files:
+  - path: /etc/systemd/system/poc-http.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Private PoC TCP test listener
+      After=network.target
+
+      [Service]
+      User=nobody
+      ExecStart=/usr/bin/python3 -m http.server 30289 --bind 0.0.0.0 --directory /var/empty
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now poc-http.service

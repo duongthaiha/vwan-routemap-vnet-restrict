@@ -1,0 +1,6 @@
+name: vwan-oci-routemap-poc
+metadata:
+  template: vwan-oci-routemap-poc
+infra:
+  provider: terraform
+  path: infra

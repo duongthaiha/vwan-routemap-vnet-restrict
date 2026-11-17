@@ -52,6 +52,12 @@ Use TCP 22 for the VM reachability checks and TCP 30289 for the simulated OCI wo
 
 VNet A-to-VNet B connectivity is not part of this PoC's acceptance criteria. Confirm the actual VPN-site and simulator static routes as well as effective routes. `Contains` matches the specified prefix and more-specific routes, but not broader aggregates. Record separately whether VPN route maps affect the static routes; do not report static route configuration as dynamic advertisement filtering.
 
+## Lab verification (2026-11-17)
+
+In the Azure-hosted simulator lab, both VPN links connected and all four traffic directions matched the table above on TCP 22 and 30289. After the map was associated, the simulator prefix disappeared from VM B's effective routes but remained on VM A and in Hub B's Default route table. NSG denies and the simulator's A-only return routes also enforce isolation.
+
+The lab remains deployed and incurs charges; cleanup requires owner approval. These results do not validate a real OCI DRG, firewall, or failover.
+
 ## Design references
 
 The supplied slides are included in [`docs/references/`](docs/references/):

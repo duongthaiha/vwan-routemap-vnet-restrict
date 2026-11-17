@@ -39,6 +39,8 @@ icacls $environmentPath /remove:g '*S-1-5-11' '*S-1-5-32-545' '*S-1-5-32-544'
 icacls $environmentPath
 ```
 
+The simulator gateway public IPs ignore changes to `ip_tags` so Azure Policy can manage those tags without Terraform replacing the IPs.
+
 Check the commands succeed and inspect the resulting ACL for any other unexpected grants; remove them before provisioning. Also inspect the private key's ACL, since `ssh-keygen` may set explicit permissions independently of its parent directory. Back up the protected state securely; use an encrypted, access-controlled remote backend before sharing the deployment or using CI. Do not commit the state, plan, VPN configuration downloads, PSK, or private SSH key. Supply the PSK to Terraform through the current process rather than `azd env set`:
 
 ```powershell
@@ -47,6 +49,8 @@ $env:TF_VAR_vpn_psk = [System.Net.NetworkCredential]::new('', $securePsk).Passwo
 ```
 
 Retain the same PSK in a secure secret store for later updates. Remove it from the shell when finished with `Remove-Item Env:\TF_VAR_vpn_psk`. Set the public-key environment variable again for future provisioning sessions.
+
+Azure does not return the vWAN link PSKs, so Terraform ignores changes to those fields after creation to avoid resetting the tunnels on every plan. To rotate the PSK, coordinate both VPN sides and temporarily remove that lifecycle ignore while applying the new key; review the plan before applying and restore the ignore afterward.
 
 ## Deploy and collect evidence
 

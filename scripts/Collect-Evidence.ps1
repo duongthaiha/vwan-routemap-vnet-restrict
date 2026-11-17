@@ -68,7 +68,7 @@ try {
         $evidence.vpnConnections["hub-$endpoint"] = Invoke-AzJson -Arguments @(
             'network', 'vpn-gateway', 'connection', 'show', '-g', $ResourceGroup,
             '--gateway-name', 'vpng-hub-a', '-n', "connection-oci-$endpoint",
-            '--query', '{name:name,provisioningState:provisioningState,links:vpnLinkConnections[].{name:name,status:vpnConnectionStatus,provisioningState:provisioningState,bgp:enableBgp,protocol:vpnConnectionProtocolType,ipsecPolicies:ipsecPolicies}}'
+            '--query', '{name:name,provisioningState:provisioningState,links:vpnLinkConnections[].{name:name,status:connectionStatus,provisioningState:provisioningState,bgp:enableBgp,protocol:vpnConnectionProtocolType,ipsecPolicies:ipsecPolicies}}'
         )
     }
 

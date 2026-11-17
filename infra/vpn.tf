@@ -27,6 +27,11 @@ resource "azurerm_public_ip" "simulator_gateway" {
   sku                 = "Standard"
   zones               = ["1", "2", "3"]
   tags                = local.tags
+
+  # Azure Policy can append IP tags; preserve them without replacing gateway IPs.
+  lifecycle {
+    ignore_changes = [ip_tags]
+  }
 }
 
 resource "azurerm_virtual_network_gateway" "simulator" {
@@ -106,6 +111,11 @@ resource "azurerm_vpn_gateway_connection" "to_simulator" {
       sa_data_size_kb          = 102400000
       sa_lifetime_sec          = 3600
     }
+  }
+
+  # Azure omits this key on reads, which otherwise causes plan drift.
+  lifecycle {
+    ignore_changes = [vpn_link[0].shared_key]
   }
 }
 

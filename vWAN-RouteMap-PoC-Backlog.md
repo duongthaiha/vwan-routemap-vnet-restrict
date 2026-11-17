@@ -4,7 +4,7 @@
 
 Build an isolated Azure Virtual WAN lab with two hubs and a simulated OCI network. Hub A and the simulator can communicate in both directions. Hub B and the simulator cannot communicate in either direction.
 
-The OCI side is an Azure VNet connected by site-to-site VPN. It simulates a remote OCI network; it is not connected to a real OCI tenancy. The design slides show the production boundary as OCI FastConnect plus Azure ExpressRoute. The VPN is a lab substitute, so it validates route-map policy and traffic behavior, not ExpressRoute-specific configuration.
+The OCI side is an Azure VNet and VPN endpoint connected to the vWAN hub by site-to-site IPsec. It simulates a remote OCI network; it is not connected to a real OCI tenancy. The supplied runbook uses static routing with BGP disabled. The PoC uses that as its baseline. It does not use FastConnect or ExpressRoute, and does not reproduce the OCI DRG or Network Firewall.
 
 ```text
  VNet A / VM A                   VNet B / VM B
@@ -15,10 +15,6 @@ The OCI side is an Azure VNet connected by site-to-site VPN. It simulates a remo
         |
  Azure VNet simulating OCI / VM OCI
 ```
-
-For the production design, the remote OCI connection is FastConnect to
-ExpressRoute. The same per-VNet outbound route-map policy applies across the
-participating vWAN hubs.
 
 ## Example address plan
 
@@ -36,16 +32,16 @@ Use non-overlapping prefixes and confirm they do not conflict with the sandbox.
 
 1. **Prepare an isolated sandbox.** Confirm subscription permissions, policy, quota, supported regions, and cost. Use only PoC resources; do not connect to or change existing customer networks. Tag resources with owner and expiry, protect credentials, and obtain approval before deployment.
 2. **Deploy the vWAN.** Create one Standard Virtual WAN with Hub A and Hub B. Connect VNet A to Hub A and VNet B to Hub B, with one test VM in each VNet. Use the Default route tables; do not add custom route tables or routing intent for this PoC.
-3. **Deploy the OCI simulator.** Create an Azure VNet, a workload VM, and an Azure VPN Gateway. Connect it to the site-to-site VPN gateway in Hub A. Configure a supported BGP-enabled VPN with non-overlapping address spaces and distinct supported ASNs (the simulator ASN must not be `65515`). Do not connect or peer the simulator VNet directly to either vWAN hub. Verify the tunnel and BGP session before route-map testing.
+3. **Deploy the static VPN simulator.** Create an Azure VNet with a workload subnet, a gateway subnet, a workload VM, and an Azure VPN Gateway acting as the remote OCI VPN endpoint. Connect it to Hub A's site-to-site VPN gateway; do not connect or peer the simulator VNet directly to either hub. Configure static routing and disable BGP. Set the simulator VNet prefix as the VPN site's private address space and configure the Azure prefixes as static routes on the simulator side. Disable default-route propagation. Match the runbook's IKEv2/IPsec policy: IKE AES-256-CBC, SHA2-384, DH group 20; IPsec AES-256-GCM for encryption and integrity, PFS group 20, 3600-second SA lifetime. Verify that the selected Azure VPN Gateway SKU supports this policy. Protect the PSK outside the repo. Establish both tunnel links if supported, but mirror the runbook's single-CPE baseline: connect to Hub gateway Instance0 only, and do not claim gateway-instance HA. Verify tunnel status and static/effective routes before route-map testing; do not expect BGP peers.
 4. **Apply the per-VNet restriction.** Create a reusable `RM-DROP-OCI` route map in each hub that owns restricted VNets. Apply it **outbound** on each restricted VNet connection, matching route prefixes **Contains** `10.29.0.0/22` with action **Drop** and next step **Terminate**. For this two-hub lab, apply it to VNet B's connection in Hub B. Do not apply it to approved VNet A: its OCI route should remain advertised. Unmatched routes remain allowed, preserving existing Azure routes. Capture route state before and after applying the map.
-5. **Filter the OCI boundary.** On the simulator-facing VPN connection (the lab equivalent of the production ExpressRoute boundary), configure inbound filtering so only approved OCI prefixes enter the vWAN, and outbound filtering so only approved Azure prefixes are advertised to the simulator. Validate the route-map match and default behavior against current Virtual WAN documentation before deployment; confirm unrelated routes remain intact. For production, apply these policies on the ExpressRoute connection to OCI FastConnect.
-6. **Add traffic safeguards.** Route maps filter route advertisements; they are not packet firewalls. Add narrowly scoped NSG deny rules between VNet B and `10.29.0.0/22` in both directions. Allow the chosen test port between VNet A and the simulator, and configure guest firewalls accordingly. Route maps on VNet connections apply to the whole VNet; if only selected subnets within a VNet require OCI access, add a separate subnet-level design. Check effective routes and security rules for alternate, static, default, aggregate, or more-specific routes that could bypass the intended boundary.
-7. **Test and record evidence.** Verify VPN/BGP health, route-map associations on both hubs and the simulator boundary, hub and VM effective routes, and effective NSG rules. Confirm Hub B does not advertise OCI routes to VNet B, VNet A retains its OCI route, and the simulator learns only approved Azure prefixes. Record the four connectivity tests below. For negative tests, retain route and NSG evidence; a timeout alone does not prove isolation. Mark tests that could not be run as BLOCKED, with a reason.
+5. **Validate static VPN route-map behavior.** Route maps process routes on connections, but this runbook has no BGP updates: OCI prefixes are configured as VPN-site address space, and Azure prefixes are configured as OCI static routes. Before relying on VPN-connection route maps as an allow-list, test whether inbound and outbound maps actually affect these statically configured prefixes. Record effective routes and route-map dashboard results. Treat the configured static route lists as the source of truth unless the test proves the maps filter them. For the OCI-to-Azure direction, configure the simulator's static routes to include VNet A only, not VNet B.
+6. **Add traffic safeguards.** Route maps filter route advertisements; they are not packet firewalls. Add narrowly scoped NSG deny rules between VNet B and `10.29.0.0/22` in both directions. On the simulator, allow only VNet A's prefix in its static routes and restrict the test ports at the guest firewall. Mirror the runbook's test services (TCP 22, TCP 30289, and optional ICMP). The OCI runbook also routes both directions through an OCI Network Firewall; the Azure simulator uses static routes and NSGs instead and does not prove OCI firewall behavior. Route maps on VNet connections apply to the whole VNet; if only selected subnets within a VNet require OCI access, add a separate subnet-level design. Check effective routes and security rules for alternate, static, default, aggregate, or more-specific routes that could bypass the intended boundary.
+7. **Test and record evidence.** Verify both VPN tunnels as configured, static route entries, route-map associations, hub and VM effective routes, and effective NSG rules. Do not expect BGP health or dynamic route advertisements. Confirm Hub B does not learn the OCI route, VNet A retains it, and the simulator has a static route to VNet A but not VNet B. Run the tests from VM A/B through Azure Serial Console or Run Command (the VMs have no public IP); initiate OCI-originated tests from the simulator workload VM. Record the four connectivity tests below. For negative tests, retain route and NSG evidence; a timeout alone does not prove isolation. Mark tests that could not be run as BLOCKED, with a reason.
 8. **Clean up.** Save redacted test results and configuration, then delete the PoC resources when they are no longer needed to avoid ongoing charges.
 
 ## Acceptance tests
 
-Start the same test service and port on each VM. Initiate a new connection from the source shown in each row.
+Use TCP 22 for the VM reachability checks and TCP 30289 for the simulated OCI workload (plus ICMP if enabled). Initiate a new connection from the source shown in each row.
 
 | Source | Destination | Expected result |
 |---|---|---|
@@ -54,7 +50,7 @@ Start the same test service and port on each VM. Initiate a new connection from 
 | VM B | VM OCI | Blocked |
 | VM OCI | VM B | Blocked |
 
-VNet A-to-VNet B connectivity is not part of this PoC's acceptance criteria. Confirm the actual advertised prefixes: `Contains` matches the specified prefix and more-specific routes, but not broader aggregates. Also verify the approved OCI prefixes entering the vWAN and approved Azure prefixes advertised to the simulator.
+VNet A-to-VNet B connectivity is not part of this PoC's acceptance criteria. Confirm the actual VPN-site and simulator static routes as well as effective routes. `Contains` matches the specified prefix and more-specific routes, but not broader aggregates. Record separately whether VPN route maps affect the static routes; do not report static route configuration as dynamic advertisement filtering.
 
 ## Design references
 
@@ -68,5 +64,7 @@ The supplied slides are included in [`docs/references/`](docs/references/):
 ## References
 
 - [Connect a virtual network gateway to Azure Virtual WAN](https://learn.microsoft.com/en-us/azure/virtual-wan/connect-virtual-network-gateway-vwan)
+- [Tutorial: Create a site-to-site connection using Virtual WAN](https://learn.microsoft.com/en-us/azure/virtual-wan/virtual-wan-site-to-site-portal)
 - [About Virtual WAN route maps](https://learn.microsoft.com/en-us/azure/virtual-wan/route-maps-about)
 - [Configure Virtual WAN route maps](https://learn.microsoft.com/en-us/azure/virtual-wan/route-maps-how-to)
+- [Configure a custom IPsec policy for Azure Virtual WAN](https://learn.microsoft.com/en-us/azure/virtual-wan/virtual-wan-custom-ipsec-portal)

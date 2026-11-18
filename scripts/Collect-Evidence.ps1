@@ -42,6 +42,7 @@ $evidence = [ordered]@{
     effectiveNsgs      = [ordered]@{}
     privateIps         = [ordered]@{}
     routeMap           = $null
+    hubARouteMap       = $null
     probes             = @()
     acceptance         = @()
 }
@@ -68,12 +69,15 @@ try {
         $evidence.vpnConnections["hub-$endpoint"] = Invoke-AzJson -Arguments @(
             'network', 'vpn-gateway', 'connection', 'show', '-g', $ResourceGroup,
             '--gateway-name', 'vpng-hub-a', '-n', "connection-oci-$endpoint",
-            '--query', '{name:name,provisioningState:provisioningState,links:vpnLinkConnections[].{name:name,status:connectionStatus,provisioningState:provisioningState,bgp:enableBgp,protocol:vpnConnectionProtocolType,ipsecPolicies:ipsecPolicies}}'
+            '--query', '{name:name,provisioningState:provisioningState,routing:routingConfiguration,links:vpnLinkConnections[].{name:name,status:connectionStatus,provisioningState:provisioningState,bgp:enableBgp,protocol:vpnConnectionProtocolType,ipsecPolicies:ipsecPolicies}}'
         )
     }
 
     $evidence.routeMap = Invoke-AzJson -Arguments @(
         'network', 'vhub', 'route-map', 'show', '-g', $ResourceGroup, '--vhub-name', 'hub-b', '-n', 'RM-DROP-OCI'
+    )
+    $evidence.hubARouteMap = Invoke-AzJson -Arguments @(
+        'network', 'vhub', 'route-map', 'show', '-g', $ResourceGroup, '--vhub-name', 'hub-a', '-n', 'RM-DROP-OCI'
     )
     foreach ($name in @('a', 'b')) {
         $connection = Invoke-AzJson -Arguments @(
@@ -94,9 +98,25 @@ try {
                 '--resource-type', 'HubVirtualNetworkConnection', '--resource-id', $connection.id
             )
         }
+        if ($name -eq 'a') {
+            $evidence.hubRoutes[$name].ociRouteTable = Invoke-AzJson -Arguments @(
+                'network', 'vhub', 'get-effective-routes', '-g', $ResourceGroup, '-n', 'hub-a',
+                '--resource-type', 'RouteTable', '--resource-id', "$($hub.id)/hubRouteTables/rt-oci-a"
+            )
+        }
     }
 
-    foreach ($name in @('a', 'b', 'oci')) {
+    $restrictedConnection = Invoke-AzJson -Arguments @(
+        'network', 'vhub', 'connection', 'show', '-g', $ResourceGroup,
+        '--vhub-name', 'hub-a', '-n', 'connection-vnet-a-no-oci'
+    )
+    $evidence.hubConnections['a-no-oci'] = $restrictedConnection
+    $evidence.hubRoutes.a.restrictedVnetConnection = Invoke-AzJson -Arguments @(
+        'network', 'vhub', 'get-effective-routes', '-g', $ResourceGroup, '-n', 'hub-a',
+        '--resource-type', 'HubVirtualNetworkConnection', '--resource-id', $restrictedConnection.id
+    )
+
+    foreach ($name in @('a', 'a-no-oci', 'b', 'oci')) {
         $evidence.nicRoutes[$name] = @(Invoke-AzJson -Arguments @(
             'network', 'nic', 'show-effective-route-table', '-g', $ResourceGroup, '-n', "nic-$name"
         ))
@@ -124,11 +144,12 @@ exec python3 - "$@" <<'POC_PROBE'
 
         $targets = @{
             a   = @('local', '127.0.0.1', 'oci', $evidence.privateIps.oci)
+            'a-no-oci' = @('local', '127.0.0.1', 'oci', $evidence.privateIps.oci)
             b   = @('local', '127.0.0.1', 'oci', $evidence.privateIps.oci)
-            oci = @('local', '127.0.0.1', 'a', $evidence.privateIps.a, 'b', $evidence.privateIps.b)
+            oci = @('local', '127.0.0.1', 'a', $evidence.privateIps.a, 'a-no-oci', $evidence.privateIps['a-no-oci'], 'b', $evidence.privateIps.b)
         }
         $probes = [System.Collections.Generic.List[object]]::new()
-        foreach ($source in @('a', 'b', 'oci')) {
+        foreach ($source in @('a', 'a-no-oci', 'b', 'oci')) {
             Write-Host "Probing from vm-$source..."
             $runCommand = @(
                 'vm', 'run-command', 'invoke', '-g', $ResourceGroup, '-n', "vm-$source",
@@ -157,11 +178,13 @@ exec python3 - "$@" <<'POC_PROBE'
         $expectations = @(
             @{ source = 'a'; target = 'oci'; connected = $true },
             @{ source = 'oci'; target = 'a'; connected = $true },
+            @{ source = 'a-no-oci'; target = 'oci'; connected = $false },
+            @{ source = 'oci'; target = 'a-no-oci'; connected = $false },
             @{ source = 'b'; target = 'oci'; connected = $false },
             @{ source = 'oci'; target = 'b'; connected = $false }
         )
         $failures = [System.Collections.Generic.List[string]]::new()
-        foreach ($source in @('a', 'b', 'oci')) {
+        foreach ($source in @('a', 'a-no-oci', 'b', 'oci')) {
             foreach ($port in @(22, 30289)) {
                 $local = @($probes | Where-Object { $_.source -eq $source -and $_.target -eq 'local' -and $_.port -eq $port })
                 if ($local.Count -ne 1 -or -not $local[0].connected) {

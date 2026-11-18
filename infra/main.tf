@@ -69,11 +69,62 @@ resource "azurerm_route_map" "drop_oci" {
   }
 }
 
+resource "azurerm_route_map" "drop_oci_hub_a" {
+  name           = "RM-DROP-OCI"
+  virtual_hub_id = module.vwan.virtual_hub_resource_ids["a"]
+
+  rule {
+    name                 = "drop-simulator-prefix"
+    next_step_if_matched = "Terminate"
+
+    match_criterion {
+      match_condition = "Contains"
+      route_prefix    = [var.simulator_prefix]
+    }
+
+    action {
+      type = "Drop"
+    }
+  }
+}
+
+resource "azurerm_virtual_hub_route_table" "oci_a" {
+  name           = "rt-oci-a"
+  virtual_hub_id = module.vwan.virtual_hub_resource_ids["a"]
+  labels         = ["hub-a-oci"]
+}
+
 resource "azurerm_virtual_hub_connection" "a" {
   name                      = "connection-vnet-a"
   virtual_hub_id            = module.vwan.virtual_hub_resource_ids["a"]
   remote_virtual_network_id = azurerm_virtual_network.workload["a"].id
   internet_security_enabled = false
+
+  routing {
+    associated_route_table_id = azurerm_virtual_hub_route_table.oci_a.id
+
+    propagated_route_table {
+      labels          = ["default"]
+      route_table_ids = ["${module.vwan.virtual_hub_resource_ids["a"]}/hubRouteTables/defaultRouteTable"]
+    }
+  }
+}
+
+resource "azurerm_virtual_hub_connection" "a_no_oci" {
+  name                      = "connection-vnet-a-no-oci"
+  virtual_hub_id            = module.vwan.virtual_hub_resource_ids["a"]
+  remote_virtual_network_id = azurerm_virtual_network.workload["a-no-oci"].id
+  internet_security_enabled = false
+
+  routing {
+    associated_route_table_id = "${module.vwan.virtual_hub_resource_ids["a"]}/hubRouteTables/defaultRouteTable"
+    outbound_route_map_id     = azurerm_route_map.drop_oci_hub_a.id
+
+    propagated_route_table {
+      labels          = ["hub-a-oci"]
+      route_table_ids = [azurerm_virtual_hub_route_table.oci_a.id]
+    }
+  }
 }
 
 resource "azurerm_virtual_hub_connection" "b" {

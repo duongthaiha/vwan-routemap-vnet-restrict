@@ -4,6 +4,10 @@ locals {
       address_space   = var.vnet_a_prefix
       workload_subnet = var.vnet_a_prefix
     }
+    a-no-oci = {
+      address_space   = var.vnet_a_no_oci_prefix
+      workload_subnet = var.vnet_a_no_oci_prefix
+    }
     b = {
       address_space   = var.vnet_b_prefix
       workload_subnet = var.vnet_b_prefix
@@ -122,6 +126,47 @@ resource "azurerm_network_security_rule" "deny_b_oci" {
 
   name                        = "deny-b-oci-${lower(each.value.direction)}"
   priority                    = 110
+  direction                   = each.value.direction
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = each.value.source
+  destination_address_prefix  = each.value.dest
+  resource_group_name         = azurerm_resource_group.poc.name
+  network_security_group_name = azurerm_network_security_group.workload[each.value.group].name
+}
+
+resource "azurerm_network_security_rule" "deny_a_no_oci" {
+  for_each = {
+    restricted_in = {
+      group     = "a-no-oci"
+      direction = "Inbound"
+      source    = var.simulator_prefix
+      dest      = "*"
+    }
+    restricted_out = {
+      group     = "a-no-oci"
+      direction = "Outbound"
+      source    = "*"
+      dest      = var.simulator_prefix
+    }
+    oci_in = {
+      group     = "oci"
+      direction = "Inbound"
+      source    = var.vnet_a_no_oci_prefix
+      dest      = "*"
+    }
+    oci_out = {
+      group     = "oci"
+      direction = "Outbound"
+      source    = "*"
+      dest      = var.vnet_a_no_oci_prefix
+    }
+  }
+
+  name                        = "deny-a-no-oci-${lower(each.value.direction)}"
+  priority                    = 111
   direction                   = each.value.direction
   access                      = "Deny"
   protocol                    = "*"

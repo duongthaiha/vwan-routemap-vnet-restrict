@@ -4,7 +4,7 @@ output "AZURE_RESOURCE_GROUP" {
 }
 
 output "VM_PRIVATE_IPS" {
-  description = "Private IP addresses for the A, B and simulated OCI test VMs."
+  description = "Private IP addresses for the A, restricted Hub A, B and simulated OCI test VMs."
   value       = { for name, nic in azurerm_network_interface.workload : name => nic.private_ip_address }
 }
 

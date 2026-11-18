@@ -83,6 +83,12 @@ variable "vnet_a_prefix" {
   default     = "10.110.0.0/24"
 }
 
+variable "vnet_a_no_oci_prefix" {
+  description = "Restricted Hub A VNet address prefix."
+  type        = string
+  default     = "10.120.0.0/24"
+}
+
 variable "vnet_b_prefix" {
   description = "Restricted VNet B address prefix."
   type        = string

@@ -94,6 +94,15 @@ resource "azurerm_vpn_gateway_connection" "to_simulator" {
   remote_vpn_site_id        = azurerm_vpn_site.simulator[each.key].id
   internet_security_enabled = false
 
+  routing {
+    associated_route_table = "${module.vwan.virtual_hub_resource_ids["a"]}/hubRouteTables/defaultRouteTable"
+
+    propagated_route_table {
+      labels          = ["hub-a-oci"]
+      route_table_ids = [azurerm_virtual_hub_route_table.oci_a.id]
+    }
+  }
+
   vpn_link {
     name             = "link-${each.key}"
     vpn_site_link_id = azurerm_vpn_site.simulator[each.key].link[0].id

@@ -1,5 +1,10 @@
 import importlib.util
+import json
+import os
 import pathlib
+import shutil
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -31,6 +36,80 @@ class ProbeTests(unittest.TestCase):
     def test_target_arguments_must_be_pairs(self):
         with self.assertRaises(ValueError):
             probe.main(["oci"])
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7 is required to exercise the collector")
+class EvidenceCollectorTests(unittest.TestCase):
+    def collect(self, allow_restricted=False):
+        mock_az = r"""
+$ErrorActionPreference = 'Stop'
+function global:az {
+    $global:LASTEXITCODE = 0
+    $arguments = @($args)
+    if ($arguments[0] -eq 'vm') {
+        $nameIndex = [array]::IndexOf($arguments, '-n')
+        $parameterIndex = [array]::IndexOf($arguments, '--parameters')
+        $source = $arguments[$nameIndex + 1].Substring(3)
+        $lines = @()
+        for ($i = $parameterIndex + 1; $i -lt $arguments.Count - 5; $i += 2) {
+            $target = $arguments[$i]
+            $connected = $target -eq 'local' -or
+                ($source -eq 'a' -and $target -eq 'oci') -or
+                ($source -eq 'oci' -and $target -eq 'a') -or
+                ($env:POC_TEST_ALLOW_RESTRICTED -eq '1' -and $source -eq 'a-no-oci' -and $target -eq 'oci')
+            foreach ($port in @(22, 30289)) {
+                $result = @{ target = $target; host = $arguments[$i + 1]; port = $port; connected = $connected }
+                $lines += 'POC_RESULT=' + ($result | ConvertTo-Json -Compress)
+            }
+        }
+        return (@{ value = @(@{ message = ($lines -join "`n") }) } | ConvertTo-Json -Compress -Depth 10)
+    }
+    if ($arguments[0] -eq 'network' -and $arguments[1] -eq 'nic' -and $arguments[2] -eq 'show') {
+        return '{"privateIp":"10.0.0.4"}'
+    }
+    return '{"id":"/test/id","value":[]}'
+}
+try {
+    & (Join-Path $env:POC_TEST_ROOT 'scripts\Collect-Evidence.ps1') `
+        -ResourceGroup 'test-rg' -SubscriptionId 'test-sub' -EvidenceFile $env:POC_TEST_EVIDENCE
+} catch {
+    Write-Error $_
+    exit 1
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "evidence.json"
+            environment = {
+                **os.environ,
+                "POC_TEST_ROOT": str(ROOT),
+                "POC_TEST_EVIDENCE": str(path),
+                "POC_TEST_ALLOW_RESTRICTED": "1" if allow_restricted else "0",
+            }
+            result = subprocess.run(
+                ["pwsh", "-NoProfile", "-NonInteractive", "-Command", mock_az],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+            )
+            self.assertTrue(path.exists(), result.stdout + result.stderr)
+            return result, json.loads(path.read_text(encoding="utf-8-sig"))
+
+    def test_all_twelve_probes_include_both_restricted_directions(self):
+        result, evidence = self.collect()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(evidence["complete"])
+        self.assertEqual(12, len(evidence["acceptance"]))
+        for source, target in (("a-no-oci", "oci"), ("oci", "a-no-oci")):
+            rows = [r for r in evidence["acceptance"] if r["source"] == source and r["target"] == target]
+            self.assertEqual({22, 30289}, {r["port"] for r in rows})
+            self.assertTrue(all(r["passed"] and r["actual"] == "not connected" for r in rows))
+
+    def test_unexpected_restricted_connection_is_a_failure(self):
+        result, evidence = self.collect(allow_restricted=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(evidence["complete"])
+        self.assertTrue(any(not row["passed"] and row["source"] == "a-no-oci" for row in evidence["acceptance"]))
 
 
 class RouteComparisonTests(unittest.TestCase):

@@ -1,16 +1,18 @@
 # Virtual WAN to simulated OCI PoC
 
-This lab creates one Standard Virtual WAN with two hubs. VNet A and its private VM connect to Hub A; VNet B and its private VM connect to Hub B. A separate Azure VNet represents OCI and connects **to Hub A's VPN gateway over site-to-site IPsec**, not by VNet peering. VNet A and the simulator should reach each other; VNet B and the simulator should not.
+This lab creates one Standard Virtual WAN with two hubs. VNet A and the restricted VNet `vnet-a-no-oci` connect to Hub A; VNet B connects to Hub B. Each has a private VM. A separate Azure VNet represents OCI and connects **to Hub A's VPN gateway over site-to-site IPsec**, not by VNet peering. VNet A and the simulator should reach each other; the restricted VNet and VNet B should not reach the simulator.
 
 The VPN uses static routes and disables BGP. Both VPN sides use IKEv2, AES256/SHA384/ECP384 for IKE, and GCMAES256/ECP384 with a 3600-second lifetime for IPsec. The Azure simulator uses an active-active `VpnGw1AZ`, two VPN sites, and two local network gateways as described in [Microsoft's gateway-to-Virtual-WAN guidance](https://learn.microsoft.com/en-us/azure/virtual-wan/connect-virtual-network-gateway-vwan). This differs from the customer's single-CPE, Instance0-only configuration; it does not validate OCI DRG, OCI Network Firewall, or that configuration's failover.
 
-An outbound route map on VNet B's Hub B connection attempts to filter the simulator prefix. Independent NSG denies and simulator-side static routes provide traffic safeguards. Route maps filter routes, not packets; inspect actual before/after routes instead of attributing a blocked connection to the map alone.
+The simulator's route is scoped to a Hub A-only custom route table so the Default tables do not learn it. VNet A uses that table; both the restricted VNet connection and VPN connections use Hub A's Default table. The restricted VNet propagates its own prefix to the custom table, not to the VPN-associated Default table. Outbound route maps on the restricted Hub A and Hub B connections and independent NSG denies remain defense in depth. Route maps filter routes, not packets; inspect effective routes and test both directions.
+
+See the [solution architecture](docs/architecture.md) for the topology, routing, safeguards, and limitations.
 
 ## Prerequisites
 
 - Azure CLI, Azure Developer CLI (`azd`), Terraform 1.7 or later, Python 3, and PowerShell 7.
 - Sign in to **both** `az` and `azd` for the intended tenant and subscription. Install the CLI extension used for evidence collection: `az extension add --name virtual-wan --yes`.
-- Permission and quota for a Standard Virtual WAN, two hubs, two VPN gateways, public IPs, three VMs, and related networking. Gateway creation can take an hour or more; quota and SKU availability do not reserve capacity.
+- Permission and quota for a Standard Virtual WAN, two hubs, two VPN gateways, public IPs, four VMs, and related networking. Gateway creation can take an hour or more; quota and SKU availability do not reserve capacity.
 - An RSA SSH public key for the VMs and a securely managed 32–128-character IPsec pre-shared key (PSK). The VMs have no public IPs; the VPN gateways require public IPs.
 - Check that the [example prefixes](vWAN-RouteMap-PoC-Backlog.md#example-address-plan) do not overlap with any network reachable from the lab.
 
@@ -75,7 +77,11 @@ python .\scripts\compare_routes.py .azure\vwan-oci-example\evidence\before.json 
   .azure\vwan-oci-example\evidence\after.json
 ```
 
-Evidence includes VPN/site configuration, hub and NIC effective routes, effective NSG rules, the route-map association, and new TCP connections on ports 22 and 30289 from each source. Local listener checks prevent a stopped service from being counted as network isolation. Use `-SkipConnectivity` to collect routing-only evidence. The comparison reports matching routes and broader routes; inspect next hops, more-specific routes, route-map association, and both directions before concluding what enforced isolation. If a matching route was not present in the baseline, map behavior is inconclusive. The Azure simulator cannot establish how route maps behave on an actual OCI DRG.
+Evidence includes VPN/site configuration and route propagation, Hub A's OCI route table and Default route table, both restricted VNet connections, NIC routes, effective NSG rules, route maps, and new TCP connections on ports 22 and 30289 from each source. Local listener checks prevent a stopped service from being counted as network isolation. For a blocked inbound test, also inspect `ss -lnt` via Run Command on both restricted VMs to confirm that their listeners bind to a non-loopback address. Use `-SkipConnectivity` to collect routing-only evidence. The comparison script reports matching and broader routes; inspect next hops, more-specific routes, route-map association, and both directions before concluding what enforced isolation. Because the route-propagation configuration is also changing, a before/after comparison does not isolate the route map's effect. The Azure simulator cannot establish how route maps behave on an actual OCI DRG.
+
+For step-by-step instructions to retest the deployed lab, see the [connectivity test runbook](docs/testing-vwan-oci-poc.md).
+
+The [four-VM verification record](vWAN-RouteMap-PoC-Backlog.md#restricted-hub-a-verification-2026-11-18) includes the observed connectivity matrix, routes, and limitations. Evidence files contain network configuration details and should remain access-controlled and outside the repository.
 
 ## Cost and cleanup
 
